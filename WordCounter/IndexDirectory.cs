@@ -6,24 +6,32 @@ namespace WordCounter;
 public class IndexDirectory
 {
     private readonly string _path;
-    ConcurrentDictionary<string, Count> occurrences = new();
-    private ConcurrentDictionary<string, Count> excluded = new();
+    private readonly ConcurrentDictionary<string, Count> _occurrences = new();
+    private readonly ConcurrentDictionary<string, Count> _excluded = new();
 
     public IndexDirectory(string path)
     {
         _path = path;
     }
 
+    /// <summary>
+    /// Begins the indexes of files concurrently. The methods blocks until all subdirectories have been indexed.
+    /// </summary>
+    /// <returns>Itself.</returns>
     public IndexDirectory Index()
     {
         Directory
             .EnumerateFiles(_path, "*.txt", SearchOption.AllDirectories)
-            .AsParallel()
-            .ForAll(IndexFile);
+            .AsParallel().ForAll(IndexFile);
         return this;
     }
 
-    public IndexDirectory ExcludeFile(string path)
+    /// <summary>
+    /// Examines input file and all words encountered will be added to the exclusion list.
+    /// </summary>
+    /// <param name="path">The path to the file that should be excluded.</param>
+    /// <returns>Itself.</returns>
+    public IndexDirectory ExcludeFromFile(string path)
     {
         var words = new Regex(@"[^\w]+")
             .Split(File.ReadAllText(path).Trim())
@@ -33,16 +41,26 @@ public class IndexDirectory
             Exclude(word);
         return this;
     }
-
+    
+    /// <summary>
+    /// Excludes a single word.
+    /// </summary>
+    /// <param name="word">Word that is added to the exclusion list.</param>
+    /// <returns>Itself.</returns>
     public IndexDirectory Exclude(string word)
     {
-        excluded[word.ToUpper()] = new Count();
+        _excluded[word.ToUpper()] = new Count();
         return this;
     }
 
-    public void Persist()
+    /// <summary>
+    /// Persists results from the indexing process. Each word is grouped into their first letter and saved as file.
+    /// If any words have been excluded an additional exclusion-stats.txt file will be created with the occurrences of
+    /// each excluded word.
+    /// </summary>
+    public void SaveStats()
     {
-        var letterGroups = occurrences
+        var letterGroups = _occurrences
             .ToList()
             .GroupBy(pair => pair.Key[..1]);
 
@@ -54,16 +72,26 @@ public class IndexDirectory
                 .ToDictionary(pair => pair.Key, x => x.Value)
                 .ToDisk($"results/{group.Key}.txt");
         }
+        PersistExcludeStats();
     }
 
-    public void PersistExcludeStats()
+    /// <summary>
+    /// Saves a statistical file of the encountered filtered words.
+    /// </summary>
+    private void PersistExcludeStats()
     {
-        excluded.ToDisk("excluded-stats.txt");
+        if (_excluded.IsEmpty)
+            return;
+        _excluded.ToDisk("results/excluded-stats.txt");
     }
 
+    /// <summary>
+    /// A file that should be indexed.
+    /// </summary>
+    /// <param name="file">The file to index</param>
     private void IndexFile(string file)
     {
-        using var content = File.OpenText(file);
+        var content = new StreamReader(File.OpenRead(file));
         while (!content.EndOfStream)
         {
             var line = content.ReadLine();
@@ -71,21 +99,33 @@ public class IndexDirectory
                 continue;
 
             foreach (var word in new Regex(@"[^\w]+").Split(line.Trim()))
-            {
-                var uppercaseWord = word.ToUpper().Trim();
-                if (uppercaseWord == string.Empty)
-                    continue;
-                if (IsFilteredWord(uppercaseWord)) continue;
-
-                var count = occurrences.GetOrAdd(uppercaseWord, new Count());
-                count.Increment();
-            }
+                IndexWord(word);
         }
     }
 
+    /// <summary>
+    /// Attempts to add the passed word to the list of occurrences. Excluded words will not be added to the list.
+    /// </summary>
+    /// <param name="word">Input word that should be indexed.</param>
+    private void IndexWord(string word)
+    {
+        var uppercaseWord = word.ToUpper().Trim();
+        if (uppercaseWord == string.Empty || IsFilteredWord(uppercaseWord))
+            return;
+
+        var count = _occurrences.GetOrAdd(uppercaseWord, new Count());
+        count.Increment();
+    }
+
+
+    /// <summary>
+    /// Checks the exclusion list to see if the passed word is contained.
+    /// </summary>
+    /// <param name="uppercaseWord">Word to validate.</param>
+    /// <returns></returns>
     private bool IsFilteredWord(string uppercaseWord)
     {
-        if (!excluded.TryGetValue(uppercaseWord, out var count)) return false;
+        if (!_excluded.TryGetValue(uppercaseWord, out var count)) return false;
         count.Increment();
         return true;
     }

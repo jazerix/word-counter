@@ -2,6 +2,9 @@ using System.Diagnostics;
 
 namespace WordCounter;
 
+/// <summary>
+/// Wrapper class since ints are passed by reference. 
+/// </summary>
 [DebuggerDisplay("{_count}", Name = "LO")]
 public class Count
 {
